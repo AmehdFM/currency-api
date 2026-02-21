@@ -163,19 +163,57 @@ func (app *App) handleConvert(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleHistory permite consultar el histórico de una moneda específica con rango de fechas
 func (app *App) handleHistory(w http.ResponseWriter, r *http.Request) {
-    // Aquí podrías filtrar por r.URL.Query().Get("start") y "end"
-    // Pero por brevedad, devolvemos los últimos 10 del historial
-    rows, _ := app.DB.Query(r.Context(), "SELECT currency_code, rate, recorded_at FROM rate_history ORDER BY recorded_at DESC LIMIT 10")
-    defer rows.Close()
+	code := strings.ToUpper(r.URL.Query().Get("code"))
+	start := r.URL.Query().Get("start") // Formato: YYYY-MM-DD
+	end := r.URL.Query().Get("end")     // Formato: YYYY-MM-DD
 
-    var results []map[string]interface{}
-    for rows.Next() {
-        var code string; var rate float64; var date time.Time
-        rows.Scan(&code, &rate, &date)
-        results = append(results, map[string]interface{}{"code": code, "rate": rate, "date": date})
-    }
-    json.NewEncoder(w).Encode(results)
+	if len(code) != 3 {
+		http.Error(w, "Se requiere un código de moneda válido (parámetro 'code')", 400)
+		return
+	}
+
+	// Construcción dinámica de la consulta SQL
+	query := "SELECT rate, recorded_at FROM rate_history WHERE currency_code = $1"
+	args := []interface{}{code}
+	argCount := 2
+
+	if start != "" {
+		query += fmt.Sprintf(" AND recorded_at >= $%d", argCount)
+		args = append(args, start)
+		argCount++
+	}
+	if end != "" {
+		query += fmt.Sprintf(" AND recorded_at <= $%d", argCount)
+		args = append(args, end)
+		argCount++
+	}
+
+	query += " ORDER BY recorded_at DESC LIMIT 100"
+
+	rows, err := app.DB.Query(r.Context(), query, args...)
+	if err != nil {
+		log.Printf("Error SQL: %v", err)
+		http.Error(w, "Error interno", 500)
+		return
+	}
+	defer rows.Close()
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		var rate decimal.Decimal
+		var date time.Time
+		rows.Scan(&rate, &date)
+		results = append(results, map[string]interface{}{
+			"code": code,
+			"rate": rate.Round(6),
+			"date": date.Format(time.RFC3339),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
 }
 
 // handleLatest devuelve todos los tipos de cambio actuales
