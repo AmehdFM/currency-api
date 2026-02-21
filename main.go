@@ -177,3 +177,57 @@ func (app *App) handleHistory(w http.ResponseWriter, r *http.Request) {
     }
     json.NewEncoder(w).Encode(results)
 }
+
+// handleLatest devuelve todos los tipos de cambio actuales
+func (app *App) handleLatest(w http.ResponseWriter, r *http.Request) {
+	rows, err := app.DB.Query(r.Context(), "SELECT currency_code, rate_to_base, updated_at FROM exchange_rates")
+	if err != nil {
+		http.Error(w, "Error en la base de datos", 500)
+		return
+	}
+	defer rows.Close()
+
+	rates := make(map[string]interface{})
+	for rows.Next() {
+		var code string
+		var rate decimal.Decimal
+		var updated time.Time
+		rows.Scan(&code, &rate, &updated)
+		rates[code] = map[string]interface{}{
+			"rate": rate.Round(6),
+			"updated_at": updated,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"base": "USD",
+		"rates": rates,
+	})
+}
+
+// handleSingleRate devuelve el precio de una sola moneda especificada en la URL
+func (app *App) handleSingleRate(w http.ResponseWriter, r *http.Request) {
+	code := strings.ToUpper(strings.TrimPrefix(r.URL.Path, "/rates/"))
+	if len(code) != 3 {
+		http.Error(w, "Código de moneda inválido", 400)
+		return
+	}
+
+	var rate decimal.Decimal
+	var updated time.Time
+	err := app.DB.QueryRow(r.Context(), "SELECT rate_to_base, updated_at FROM exchange_rates WHERE currency_code=$1", code).Scan(&rate, &updated)
+	
+	if err != nil {
+		http.Error(w, "Moneda no encontrada", 404)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"code": code,
+		"rate": rate.Round(6),
+		"base": "USD",
+		"updated_at": updated,
+	})
+}
